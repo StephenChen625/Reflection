@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>光线反射模拟游戏</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #282c34;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #61dafb;
+            background-color: #20232a;
+        }
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+        .controls label, .controls select, .controls input, .controls button {
+            display: block;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .controls select, .controls input[type="range"], .controls button {
+            width: 100%;
+            padding: 5px;
+            border: none;
+            border-radius: 5px;
+        }
+        .controls select, .controls input[type="range"] {
+            background-color: #333;
+            color: #fff;
+        }
+        .controls button {
+            background-color: #61dafb;
+            color: #000;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .controls button:hover {
+            background-color: #21a1f1;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <label for="modeSelect">模式选择:</label>
+        <select id="modeSelect">
+            <option value="addMirror">添加反射镜</option>
+            <option value="addWall">添加墙壁</option>
+            <option value="addMonster">添加小怪兽</option>
+            <option value="remove">移除模式</option>
+        </select>
+        <label for="laserLength">激光长度:</label>
+        <input type="range" id="laserLength" min="10" max="500" value="100">
+        <label for="levelSelect">选择关卡:</label>
+        <select id="levelSelect">
+            <option value="0">关卡 1</option>
+            <option value="1">关卡 2</option>
+            <option value="2">关卡 3</option>
+            <option value="3">关卡 4</option>
+            <option value="4">关卡 5</option>
+            <option value="5">关卡 6</option>
+            <option value="6">关卡 7</option>
+            <option value="7">关卡 8</option>
+            <option value="8">关卡 9</option>
+            <option value="9">关卡 10</option>
+        </select>
+        <button id="saveLevel">保存关卡</button>
+        <button id="loadLevel">加载关卡</button>
+    </div>
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gridSize = 50; // 方块大小
+        const gridPoints = []; // 存储网格顶点坐标
+        let mirrors = []; // 存储镜子的坐标对
+        let walls = []; // 存储墙壁的坐标
+        let monsters = []; // 存储小怪兽的坐标
+        let laser = { x: 300, y: 300, angle: 0 }; // 激光初始位置和角度
+        let laserLength = 100; // 激光长度
+        let isDrawingMirror = false;
+        let startPoint = null;
+        const modeSelect = document.getElementById('modeSelect');
+        const laserLengthSlider = document.getElementById('laserLength');
+        const saveLevelButton = document.getElementById('saveLevel');
+        const loadLevelButton = document.getElementById('loadLevel');
+        const levelSelect = document.getElementById('levelSelect');
+        const selectionBuffer = 10; // 缓冲距离
+
+        // 初始化网格顶点
+        for (let i = 0; i <= canvas.width; i += gridSize) {
+            for (let j = 0; j <= canvas.height; j += gridSize) {
+                gridPoints.push({ x: i, y: j });
+            }
+        }
+
+        canvas.addEventListener('click', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            const mode = modeSelect.value;
+
+            if (mode === 'remove') {
+                removeMirrorAtPoint({ x, y });
+                removeWallAtPoint({ x, y });
+                removeMonsterAtPoint({ x, y });
+            } else if (mode === 'addWall') {
+                const wallCenter = getWallCenter(x, y);
+                if (wallCenter) {
+                    addWallAtPoint(wallCenter);
+                }
+            } else if (mode === 'addMonster') {
+                const monsterCenter = getWallCenter(x, y);
+                if (monsterCenter) {
+                    addMonsterAtPoint(monsterCenter);
+                }
+            } else if (mode === 'addMirror') {
+                const gridPoint = getClosestPointWithBuffer(x, y, selectionBuffer);
+                if (gridPoint) {
+                    if (isDrawingMirror) {
+                        mirrors.push({ start: startPoint, end: gridPoint });
+                        isDrawingMirror = false;
+                        startPoint = null; // 清除选中的点
+                    } else {
+                        startPoint = gridPoint;
+                        isDrawingMirror = true;
+                    }
+                }
+            }
+        });
+
+        laserLengthSlider.addEventListener('input', (event) => {
+            laserLength = event.target.value;
+        });
+
+        saveLevelButton.addEventListener('click', saveLevel);
+        loadLevelButton.addEventListener('click', loadLevel);
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowUp') laser.angle -= 1;
+            if (event.key === 'ArrowDown') laser.angle += 1;
+            if (event.key === 'ArrowRight') laser.x += 5;
+            if (event.key === 'ArrowLeft') laser.x -= 5;
+            if (event.key === 'w') laser.y -= 5;
+            if (event.key === 's') laser.y += 5;
+        });
+
+        function getClosestPointWithBuffer(x, y, buffer) {
+            let minDist = buffer;
+            let closestPoint = null;
+            for (const point of gridPoints) {
+                const dist = Math.hypot(point.x - x, point.y - y);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestPoint = point;
+                }
+            }
+            return closestPoint;
+        }
+
+        function getWallCenter(x, y) {
+            for (let i = 0; i < gridPoints.length - 1; i++) {
+                for (let j = 0; j < gridPoints.length - 1; j++) {
+                    const p1 = gridPoints[i];
+                    const p2 = gridPoints[i + 1];
+                    const p3 = gridPoints[j];
+                    const p4 = gridPoints[j + 1];
+                    if (x > p1.x && x < p2.x && y > p3.y && y < p4.y) {
+                        return { x: (p1.x + p2.x) / 2, y: (p3.y + p4.y) / 2 };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#61dafb';
+            gridPoints.forEach(point => {
+                ctx.fillRect(point.x - 2, point.y - 2, 4, 4);
+            });
+        }
+
+        function drawSelectedPoint() {
+            if (startPoint) {
+                ctx.beginPath();
+                ctx.arc(startPoint.x, startPoint.y, 5, 0, 2 * Math.PI);
+                ctx.fillStyle = 'yellow';
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+
+        function drawMirrors() {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            mirrors.forEach(mirror => {
+                ctx.beginPath();
+                ctx.moveTo(mirror.start.x, mirror.start.y);
+                ctx.lineTo(mirror.end.x, mirror.end.y);
+                ctx.stroke();
+            });
+        }
+
+        function drawWalls() {
+            ctx.fillStyle = 'gray';
+            walls.forEach(wall => {
+                ctx.fillRect(wall.x - gridSize / 2, wall.y - gridSize / 2, gridSize, gridSize);
+            });
+        }
+
+        function drawMonsters() {
+            monsters.forEach(monster => {
+                ctx.fillStyle = monster.color;
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+
+                // 画小怪兽身体
+                ctx.beginPath();
+                ctx.arc(monster.x, monster.y, 20, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+
+                // 画小怪兽尖耳朵
+                ctx.beginPath();
+                ctx.moveTo(monster.x - 15, monster.y - 20);
+                ctx.lineTo(monster.x - 5, monster.y - 30);
+                ctx.lineTo(monster.x - 10, monster.y - 15);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(monster.x + 15, monster.y - 20);
+                ctx.lineTo(monster.x + 5, monster.y - 30);
+                ctx.lineTo(monster.x + 10, monster.y - 15);
+                ctx.fill();
+                ctx.stroke();
+
+                // 画小怪兽眼睛
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(monster.x - 10, monster.y - 5, 3, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(monster.x + 10, monster.y - 5, 3, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(monster.x - 10, monster.y - 5, 2, 0, 2 * Math.PI);
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(monster.x + 10, monster.y - 5, 2, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // 画小怪兽嘴巴
+                ctx.beginPath();
+                ctx.moveTo(monster.x - 10, monster.y + 10);
+                ctx.lineTo(monster.x, monster.y + 5);
+                ctx.lineTo(monster.x + 10, monster.y + 10);
+                ctx.stroke();
+            });
+        }
+
+        function drawLaser() {
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 1;
+            let currentX = laser.x;
+            let currentY = laser.y;
+            let currentAngle = laser.angle;
+            let steps = 100; // 防止无限循环
+
+            while (steps > 0) {
+                steps--;
+                const dx = Math.cos(currentAngle * Math.PI / 180);
+                const dy = Math.sin(currentAngle * Math.PI / 180);
+                const nextX = currentX + dx * laserLength;
+                const nextY = currentY + dy * laserLength;
+
+                let hitSomething = false;
+
+                // 检查是否撞到墙壁或小怪兽
+                for (const wall of walls) {
+                    const wallEdgePoint = getWallEdgePoint(currentX, currentY, nextX, nextY, wall);
+                    if (wallEdgePoint) {
+                        ctx.beginPath();
+                        ctx.moveTo(currentX, currentY);
+                        ctx.lineTo(wallEdgePoint.x, wallEdgePoint.y);
+                        ctx.stroke();
+                        hitSomething = true;
+                        break;
+                    }
+                }
+
+                if (hitSomething) {
+                    break;
+                }
+
+                for (const monster of monsters) {
+                    const monsterEdgePoint = getWallEdgePoint(currentX, currentY, nextX, nextY, monster);
+                    if (monsterEdgePoint) {
+                        ctx.beginPath();
+                        ctx.moveTo(currentX, currentY);
+                        ctx.lineTo(monsterEdgePoint.x, monsterEdgePoint.y);
+                        ctx.stroke();
+                        hitSomething = true;
+                        break;
+                    }
+                }
+
+                if (hitSomething) {
+                    break;
+                }
+
+                // 检查是否撞到镜子
+                for (const mirror of mirrors) {
+                    const intersection = getLineIntersection(currentX, currentY, nextX, nextY, mirror.start.x, mirror.start.y, mirror.end.x, mirror.end.y);
+                    if (intersection) {
+                        ctx.beginPath();
+                        ctx.moveTo(currentX, currentY);
+                        ctx.lineTo(intersection.x, intersection.y);
+                        ctx.stroke();
+                        currentX = intersection.x;
+                        currentY = intersection.y;
+
+                        const mirrorAngle = getAngle(mirror.start, mirror.end);
+                        currentAngle = 2 * mirrorAngle - currentAngle;
+
+                        // Slightly offset to prevent the laser from getting stuck at the intersection point
+                        currentX += Math.cos(currentAngle * Math.PI / 180);
+                        currentY += Math.sin(currentAngle * Math.PI / 180);
+
+                        hitSomething = true;
+                        break;
+                    }
+                }
+
+                if (!hitSomething) {
+                    ctx.beginPath();
+                    ctx.moveTo(currentX, currentY);
+                    ctx.lineTo(nextX, nextY);
+                    ctx.stroke();
+                    currentX = nextX;
+                    currentY = nextY;
+                }
+            }
+        }
+
+        function getWallEdgePoint(x1, y1, x2, y2, wall) {
+            const wallMinX = wall.x - gridSize / 2;
+            const wallMaxX = wall.x + gridSize / 2;
+            const wallMinY = wall.y - gridSize / 2;
+            const wallMaxY = wall.y + gridSize / 2;
+
+            const intersections = [];
+
+            // 上边
+            if (y1 < wallMinY && y2 >= wallMinY) {
+                const x = x1 + (x2 - x1) * (wallMinY - y1) / (y2 - y1);
+                if (x >= wallMinX && x <= wallMaxX) {
+                    intersections.push({ x: x, y: wallMinY });
+                }
+            }
+            // 下边
+            if (y1 > wallMaxY && y2 <= wallMaxY) {
+                const x = x1 + (x2 - x1) * (wallMaxY - y1) / (y2 - y1);
+                if (x >= wallMinX && x <= wallMaxX) {
+                    intersections.push({ x: x, y: wallMaxY });
+                }
+            }
+            // 左边
+            if (x1 < wallMinX && x2 >= wallMinX) {
+                const y = y1 + (y2 - y1) * (wallMinX - x1) / (x2 - x1);
+                if (y >= wallMinY && y <= wallMaxY) {
+                    intersections.push({ x: wallMinX, y: y });
+                }
+            }
+            // 右边
+            if (x1 > wallMaxX && x2 <= wallMaxX) {
+                const y = y1 + (y2 - y1) * (wallMaxX - x1) / (x2 - x1);
+                if (y >= wallMinY && y <= wallMaxY) {
+                    intersections.push({ x: wallMaxX, y: y });
+                }
+            }
+
+            if (intersections.length === 0) {
+                return null;
+            }
+
+            // 找到最近的交点
+            let closestIntersection = intersections[0];
+            let minDist = Math.hypot(closestIntersection.x - x1, closestIntersection.y - y1);
+            for (const intersection of intersections) {
+                const dist = Math.hypot(intersection.x - x1, intersection.y - y1);
+                if (dist < minDist) {
+                    closestIntersection = intersection;
+                    minDist = dist;
+                }
+            }
+            return closestIntersection;
+        }
+
+        function addWallAtPoint(point) {
+            walls.push({ x: point.x, y: point.y });
+        }
+
+        function addMonsterAtPoint(point) {
+            const color = getRandomColor();
+            monsters.push({ x: point.x, y: point.y, color });
+        }
+
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        function removeMirrorAtPoint(point) {
+            mirrors = mirrors.filter(mirror => {
+                const distanceToStart = pointLineDistance(point, mirror.start, mirror.end);
+                return distanceToStart > selectionBuffer;
+            });
+        }
+
+        function removeWallAtPoint(point) {
+            walls = walls.filter(wall => {
+                return !isPointInWall(point.x, point.y, wall);
+            });
+        }
+
+        function removeMonsterAtPoint(point) {
+            monsters = monsters.filter(monster => {
+                return !isPointInWall(point.x, point.y, monster);
+            });
+        }
+
+        function isPointInWall(x, y, wall) {
+            return (
+                x >= wall.x - gridSize / 2 &&
+                x <= wall.x + gridSize / 2 &&
+                y >= wall.y - gridSize / 2 &&
+                y <= wall.y + gridSize / 2
+            );
+        }
+
+        function pointLineDistance(point, start, end) {
+            const a = end.y - start.y;
+            const b = start.x - end.x;
+            const c = end.x * start.y - start.x * end.y;
+            return Math.abs(a * point.x + b * point.y + c) / Math.hypot(a, b);
+        }
+
+        function getLineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
+            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (denom === 0) return null;
+            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+            const u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / denom;
+            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+                return {
+                    x: x1 + t * (x2 - x1),
+                    y: y1 + t * (y2 - y1)
+                };
+            }
+            return null;
+        }
+
+        function getAngle(point1, point2) {
+            return Math.atan2(point2.y - point1.y, point2.x - point1.x) * 180 / Math.PI;
+        }
+
+        function saveLevel() {
+            const levelIndex = levelSelect.value;
+            const levelData = {
+                laser,
+                laserLength,
+                mirrors,
+                walls,
+                monsters
+            };
+            const levelDataString = JSON.stringify(levelData);
+            localStorage.setItem(`savedLevel_${levelIndex}`, levelDataString);
+            alert(`关卡 ${parseInt(levelIndex) + 1} 已保存`);
+        }
+
+        function loadLevel() {
+            const levelIndex = levelSelect.value;
+            const levelDataString = localStorage.getItem(`savedLevel_${levelIndex}`);
+            if (levelDataString) {
+                const levelData = JSON.parse(levelDataString);
+                laser = levelData.laser;
+                laserLength = levelData.laserLength;
+                mirrors = levelData.mirrors;
+                walls = levelData.walls;
+                monsters = levelData.monsters;
+                laserLengthSlider.value = laserLength;
+                alert(`关卡 ${parseInt(levelIndex) + 1} 已加载`);
+            } else {
+                alert(`关卡 ${parseInt(levelIndex) + 1} 尚未保存`);
+            }
+        }
+
+        function gameLoop() {
+            drawGrid();
+            drawSelectedPoint();
+            drawMirrors();
+            drawWalls();
+            drawMonsters();
+            drawLaser();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
