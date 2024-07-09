@@ -91,7 +91,8 @@
         let walls = []; // 存储墙壁的坐标
         let monsters = []; // 存储小怪兽的坐标
         let laser = { x: 1, y: 525, angle: 0 }; // 激光初始位置和角度
-        let laserLength = 100; // 激光长度
+        let laserLength = 10; // 激光长度
+        let laserLengthSteps = 100; // 激光长度
         let isDrawingMirror = false;
         let startPoint = null;
         const modeSelect = document.getElementById('modeSelect');
@@ -144,7 +145,7 @@
         });
 
         laserLengthSlider.addEventListener('input', (event) => {
-            laserLength = event.target.value;
+            laserLengthSteps = event.target.value;
         });
 
         saveLevelButton.addEventListener('click', saveLevel);
@@ -286,7 +287,7 @@
             let currentX = laser.x;
             let currentY = laser.y;
             let currentAngle = laser.angle;
-            let steps = 100; // 防止无限循环
+            let steps = laserLengthSteps; // 防止无限循环
 
             while (steps > 0) {
                 steps--;
